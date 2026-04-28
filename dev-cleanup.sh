@@ -456,7 +456,7 @@ should_run_task() {
   fi
 
   # Otherwise, skip if in SKIP_SET
-  for s in "${SKIP_SET[@]}"; do
+  for s in "${SKIP_SET[@]+"${SKIP_SET[@]}"}"; do
     [[ "$t" == "$s" ]] && return 1
   done
   return 0
