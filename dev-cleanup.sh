@@ -22,7 +22,11 @@ SCRIPT_NAME="$(basename "$0")"
 # ---------- helpers ----------
 color() {
   local code="$1"; shift
-  printf "\033[%sm%s\033[0m" "$code" "$*"
+  if [ -t 1 ]; then
+    printf "\033[%sm%s\033[0m" "$code" "$*"
+  else
+    printf "%s" "$*"
+  fi
 }
 info() { echo "$(color 36 '[info]') $*"; }
 warn() { echo "$(color 33 '[warn]') $*"; }
@@ -64,6 +68,11 @@ run() {
   fi
 }
 
+# runinfo: always executes even in dry-run (used for informational commands like du)
+runinfo() {
+  eval "$@"
+}
+
 bytes_free_human() {
   # df -h isn't consistent for scripting, but good enough for human display
   df -h / | awk 'NR==2 {print $4 " free (" $5 " used)"}'
@@ -76,40 +85,34 @@ section() {
 }
 
 # ---------- tasks ----------
-declare -A TASK_DESC
-declare -A TASK_FN
+task_desc() {
+  case "$1" in
+    xcode-deriveddata) echo "Delete Xcode DerivedData (safe, rebuilds later)" ;;
+    ios-simulators)    echo "Delete iOS simulators (CoreSimulator) and unavailable devices" ;;
+    cocoapods)         echo "Clear CocoaPods caches (~/Library/Caches/CocoaPods and ~/.cocoapods/repos)" ;;
+    android)           echo "Clear Gradle caches (~/.gradle/caches) and Android AVDs" ;;
+    node-caches)       echo "Clear Node/Expo/Metro/Yarn/pnpm caches" ;;
+    tm-snapshots)      echo "Thin local Time Machine snapshots (may reclaim System Data)" ;;
+    logs)              echo "Clear user and system logs (~/Library/Logs and /Library/Logs)" ;;
+    homebrew)          echo "Homebrew cleanup (remove old formula versions and caches)" ;;
+    docker-prune)      echo "Docker safe prune (docker system prune). Requires Docker daemon running" ;;
+    spotlight)         echo "Spotlight reindex (overnight, high CPU). Rarely needed" ;;
+    report)            echo "Report large dev directories (shows sizes, no deletion)" ;;
+    *)                 echo "" ;;
+  esac
+}
 
-TASK_DESC["xcode-deriveddata"]="Delete Xcode DerivedData (safe, rebuilds later)"
-TASK_FN["xcode-deriveddata"]="task_xcode_deriveddata"
-
-TASK_DESC["ios-simulators"]="Delete iOS simulators (CoreSimulator) and unavailable devices"
-TASK_FN["ios-simulators"]="task_ios_simulators"
-
-TASK_DESC["node-caches"]="Clear Node/Expo/Metro caches (~/.npm, ~/.cache, ~/.expo, ~/.metro, /tmp/metro-*)"
-TASK_FN["node-caches"]="task_node_caches"
-
-TASK_DESC["tm-snapshots"]="Thin local Time Machine snapshots (may reclaim System Data)"
-TASK_FN["tm-snapshots"]="task_tm_snapshots"
-
-TASK_DESC["logs"]="Clear user and system logs (~/Library/Logs and /Library/Logs)"
-TASK_FN["logs"]="task_logs"
-
-TASK_DESC["homebrew"]="Homebrew cleanup (remove old formula versions and caches)"
-TASK_FN["homebrew"]="task_homebrew"
-
-TASK_DESC["docker-prune"]="Docker safe prune (docker system prune). Requires Docker daemon running"
-TASK_FN["docker-prune"]="task_docker_prune"
-
-TASK_DESC["spotlight"]="Spotlight reindex (overnight, high CPU). Rarely needed"
-TASK_FN["spotlight"]="task_spotlight"
-
-TASK_DESC["report"]="Report large dev directories (shows sizes, no deletion)"
-TASK_FN["report"]="task_report"
+task_fn() {
+  # Convert task name to function name: hyphens -> underscores, prepend task_
+  echo "task_${1//-/_}"
+}
 
 DEFAULT_ORDER=( \
   "report" \
   "xcode-deriveddata" \
   "ios-simulators" \
+  "cocoapods" \
+  "android" \
   "node-caches" \
   "tm-snapshots" \
   "logs" \
@@ -121,12 +124,13 @@ DEFAULT_ORDER=( \
 task_report() {
   section "Report"
   info "Showing sizes for common culprits."
-  run 'du -sh ~/Library/Developer 2>/dev/null || true'
-  run 'du -sh ~/Library/Developer/CoreSimulator 2>/dev/null || true'
-  run 'du -sh ~/Library/Developer/Xcode/DerivedData 2>/dev/null || true'
-  run 'du -sh ~/Library/Containers 2>/dev/null || true'
+  runinfo 'du -sh ~/Library/Developer 2>/dev/null || true'
+  runinfo 'du -sh ~/Library/Developer/CoreSimulator 2>/dev/null || true'
+  runinfo 'du -sh ~/Library/Developer/Xcode/DerivedData 2>/dev/null || true'
+  runinfo 'du -sh ~/.gradle/caches 2>/dev/null || true'
+  runinfo 'du -sh ~/Library/Containers 2>/dev/null || true'
   if [[ -d ~/Library/Containers/com.docker.docker ]]; then
-    run 'du -sh ~/Library/Containers/com.docker.docker 2>/dev/null || true'
+    runinfo 'du -sh ~/Library/Containers/com.docker.docker 2>/dev/null || true'
   fi
 }
 
@@ -137,7 +141,7 @@ task_xcode_deriveddata() {
     ok "No DerivedData directory found."
     return 0
   fi
-  run "du -sh \"$path\" 2>/dev/null || true"
+  runinfo "du -sh \"$path\" 2>/dev/null || true"
   if confirm "Delete DerivedData at $path?"; then
     run "rm -rf \"$path\""
     ok "Deleted DerivedData."
@@ -155,7 +159,7 @@ task_ios_simulators() {
   fi
 
   warn "Close Xcode and Simulator first to prevent immediate recreation."
-  run "du -sh \"$path\" 2>/dev/null || true"
+  runinfo "du -sh \"$path\" 2>/dev/null || true"
 
   if need_cmd xcrun; then
     if confirm "Delete unavailable simulators/devices via 'xcrun simctl delete unavailable'?"; then
@@ -180,15 +184,98 @@ task_ios_simulators() {
   fi
 }
 
+task_cocoapods() {
+  section "CocoaPods"
+  local cache="$HOME/Library/Caches/CocoaPods"
+  local repos="$HOME/.cocoapods/repos"
+
+  if [[ ! -d "$cache" ]] && [[ ! -d "$repos" ]]; then
+    ok "No CocoaPods cache found."
+    return 0
+  fi
+
+  [[ -d "$cache" ]] && runinfo "du -sh \"$cache\" 2>/dev/null || true"
+  [[ -d "$repos" ]] && runinfo "du -sh \"$repos\" 2>/dev/null || true"
+
+  if [[ -d "$cache" ]]; then
+    if need_cmd pod; then
+      if confirm "Clean CocoaPods cache via 'pod cache clean --all'?"; then
+        run "pod cache clean --all"
+        ok "Cleaned CocoaPods cache."
+      else
+        info "Skipped CocoaPods cache."
+      fi
+    else
+      if confirm "Delete CocoaPods download cache ($cache)?"; then
+        run "rm -rf \"$cache\""
+        ok "Deleted CocoaPods cache."
+      else
+        info "Skipped CocoaPods cache."
+      fi
+    fi
+  fi
+
+  if [[ -d "$repos" ]]; then
+    warn "Deleting spec repos means 'pod install' will re-clone them (slow first run)."
+    if confirm "Delete CocoaPods spec repos ($repos)?"; then
+      run "rm -rf \"$repos\""
+      ok "Deleted CocoaPods spec repos."
+    else
+      info "Skipped CocoaPods spec repos."
+    fi
+  fi
+}
+
+task_android() {
+  section "Android/Gradle caches"
+  local gradle_cache="$HOME/.gradle/caches"
+  local avd_dir="$HOME/.android/avd"
+
+  if [[ ! -d "$gradle_cache" ]] && [[ ! -d "$avd_dir" ]]; then
+    ok "No Android/Gradle cache found."
+    return 0
+  fi
+
+  [[ -d "$gradle_cache" ]] && runinfo "du -sh \"$gradle_cache\" 2>/dev/null || true"
+  [[ -d "$avd_dir" ]]      && runinfo "du -sh \"$avd_dir\" 2>/dev/null || true"
+
+  if [[ -d "$gradle_cache" ]]; then
+    warn "Deleting Gradle caches will slow the next Android build (re-downloads dependencies)."
+    if confirm "Delete Gradle caches ($gradle_cache)?"; then
+      run "rm -rf \"$gradle_cache\""
+      ok "Deleted Gradle caches."
+    else
+      info "Skipped Gradle caches."
+    fi
+  fi
+
+  if [[ -d "$avd_dir" ]]; then
+    warn "Deleting AVDs removes all Android emulator devices and their data."
+    if confirm "Delete Android Virtual Devices ($avd_dir)?"; then
+      run "rm -rf \"$avd_dir\""
+      ok "Deleted AVDs."
+    else
+      info "Skipped AVDs."
+    fi
+  fi
+}
+
 task_node_caches() {
-  section "Node/Expo/Metro caches"
-  local targets=( "$HOME/.npm" "$HOME/.cache" "$HOME/.expo" "$HOME/.metro" "/tmp/metro-*" )
+  section "Node/Expo/Metro/Yarn/pnpm caches"
+  local targets=(
+    "$HOME/.npm"
+    "$HOME/.cache/yarn" "$HOME/.cache/expo-cli" "$HOME/.cache/node"
+    "$HOME/.yarn/cache"
+    "$HOME/.pnpm-store"
+    "$HOME/.expo" "$HOME/.metro"
+    "/tmp/metro-*"
+  )
   info "Targets:"
   for t in "${targets[@]}"; do echo "  - $t"; done
   warn "Downside: first install/build may be slower. Safe to regenerate."
 
   if confirm "Clear these caches?"; then
-    run "rm -rf \"$HOME/.npm\" \"$HOME/.cache\" \"$HOME/.expo\" \"$HOME/.metro\""
+    run "rm -rf \"$HOME/.npm\" \"$HOME/.cache/yarn\" \"$HOME/.cache/expo-cli\" \"$HOME/.cache/node\" \"$HOME/.yarn/cache\" \"$HOME/.pnpm-store\" \"$HOME/.expo\" \"$HOME/.metro\""
     run "rm -rf /tmp/metro-* 2>/dev/null || true"
     ok "Cleared caches."
   else
@@ -204,7 +291,7 @@ task_tm_snapshots() {
   fi
 
   info "Listing local snapshots (if any):"
-  run "tmutil listlocalsnapshots / || true"
+  runinfo "tmutil listlocalsnapshots / || true"
 
   warn "This affects only local snapshots, not external backups."
   if confirm "Thin local snapshots (may require sudo)?"; then
@@ -221,8 +308,8 @@ task_logs() {
   local user_logs="$HOME/Library/Logs"
   local system_logs="/Library/Logs"
 
-  run "du -sh \"$user_logs\" 2>/dev/null || true"
-  run "sudo du -sh \"$system_logs\" 2>/dev/null || true"
+  runinfo "du -sh \"$user_logs\" 2>/dev/null || true"
+  runinfo "sudo du -sh \"$system_logs\" 2>/dev/null || true"
 
   if confirm "Clear user logs at $user_logs?"; then
     run "rm -rf \"$user_logs\"/*"
@@ -253,9 +340,10 @@ task_homebrew() {
     info "Skipped brew cleanup."
   fi
 
-  local cache="$HOME/Library/Caches/Homebrew"
+  local cache
+  cache="$(brew --cache 2>/dev/null || echo "$HOME/Library/Caches/Homebrew")"
   if [[ -d "$cache" ]]; then
-    run "du -sh \"$cache\" 2>/dev/null || true"
+    runinfo "du -sh \"$cache\" 2>/dev/null || true"
     if confirm "Delete Homebrew cache folder ($cache)?"; then
       run "rm -rf \"$cache\""
       ok "Deleted Homebrew cache."
@@ -320,11 +408,13 @@ ASSUME_YES=0
 DRY_RUN=0
 ONLY_SET=()
 SKIP_SET=()
+TASKS_RAN=()
+TASKS_SKIPPED=()
 
 list_tasks() {
   echo "Available tasks:"
   for k in "${DEFAULT_ORDER[@]}"; do
-    printf "  %-16s %s\n" "$k" "${TASK_DESC[$k]}"
+    printf "  %-16s %s\n" "$k" "$(task_desc "$k")"
   done
   echo
   echo "Examples:"
@@ -347,7 +437,7 @@ parse_csv() {
 
 validate_task() {
   local t="$1"
-  if [[ -z "${TASK_FN[$t]:-}" ]]; then
+  if [[ -z "$(task_desc "$t")" ]]; then
     err "Unknown task: $t"
     err "Run: $SCRIPT_NAME --list"
     exit 2
@@ -424,13 +514,23 @@ info "Disk: $(bytes_free_human)"
 for t in "${DEFAULT_ORDER[@]}"; do
   validate_task "$t"
   if should_run_task "$t"; then
-    section "${TASK_DESC[$t]}"
-    "${TASK_FN[$t]}"
+    "$(task_fn "$t")"
+    TASKS_RAN+=("$t")
   else
     info "Skipping task: $t"
+    TASKS_SKIPPED+=("$t")
   fi
 done
 
+echo
+echo "$(color 1 '=== Summary ===')"
+if [[ "${#TASKS_RAN[@]}" -gt 0 ]]; then
+  echo "$(color 32 '  Ran:')     ${TASKS_RAN[*]}"
+fi
+if [[ "${#TASKS_SKIPPED[@]}" -gt 0 ]]; then
+  echo "$(color 90 '  Skipped:') ${TASKS_SKIPPED[*]}"
+fi
+echo
 ok "All done."
 info "Disk: $(bytes_free_human)"
 info "Tip: Storage numbers may update after a reboot."
