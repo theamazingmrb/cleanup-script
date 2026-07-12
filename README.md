@@ -128,17 +128,24 @@ Shows what *would* be deleted without deleting anything.
 
 ## Cleanup tasks included
 
-| Task              | Description                                 |
-| ----------------- | ------------------------------------------- |
-| report            | Shows disk usage for common dev directories |
-| xcode-deriveddata | Clears Xcode build artifacts                |
-| ios-simulators    | Removes unused or all iOS simulators        |
-| node-caches       | Clears npm, Expo, Metro caches              |
-| tm-snapshots      | Thins local Time Machine snapshots          |
-| logs              | Clears user and system logs                 |
-| homebrew          | Removes old Homebrew versions and cache     |
-| docker-prune      | Safe Docker cleanup (no volumes)            |
-| spotlight         | Reindexes Spotlight (rarely needed)         |
+| Task                  | Description                                                    |
+| --------------------- | ------------------------------------------------------------- |
+| report                | Shows disk usage for common dev directories                   |
+| xcode-deriveddata     | Clears Xcode build artifacts                                   |
+| xcode-devicesupport   | Clears iOS/watchOS DeviceSupport symbol files                 |
+| ios-simulators        | Removes unused or all iOS simulators                          |
+| cocoapods             | Clears CocoaPods cache and spec repos                         |
+| android               | Clears Gradle caches and Android AVDs                         |
+| node-caches           | Clears npm, Expo, Metro, Yarn, pnpm caches                    |
+| app-caches            | Clears large app caches (Google, Spotify, Playwright, etc.)   |
+| claude-app            | Clears Claude desktop app VM bundles and cache                |
+| vscode-cache          | Clears VS Code cache dirs (keeps settings and extensions)     |
+| pip-cache             | Clears pip download cache                                     |
+| tm-snapshots          | Thins local Time Machine snapshots                            |
+| logs                  | Clears user and system logs                                   |
+| homebrew              | Removes old Homebrew versions and cache                       |
+| docker-prune          | Safe Docker cleanup (no volumes)                              |
+| spotlight             | Reindexes Spotlight (rarely needed)                           |
 
 ---
 
@@ -156,20 +163,19 @@ Docker-related cleanup **only runs if the Docker daemon is running**. Nothing is
 
 ## Adding a new cleanup task
 
-1. Add a description:
+1. Add a description in the `task_desc()` function:
 
 ```bash
-TASK_DESC["my-task"]="What this cleanup does"
-TASK_FN["my-task"]="task_my_task"
+my-task) echo "What this cleanup does" ;;
 ```
 
-2. Add it to the execution order:
+2. Add it to `DEFAULT_ORDER`:
 
 ```bash
 DEFAULT_ORDER+=("my-task")
 ```
 
-3. Implement the function:
+3. Implement the function (hyphens become underscores):
 
 ```bash
 task_my_task() {
@@ -186,8 +192,7 @@ The script will automatically support `--only my-task` and `--skip my-task`.
 
 ## Removing a cleanup task
 
-* Remove it from `TASK_DESC`
-* Remove it from `TASK_FN`
+* Remove the case from `task_desc()`
 * Remove it from `DEFAULT_ORDER`
 
 No other changes required.
@@ -210,7 +215,9 @@ No other changes required.
 
 ---
 
-## License / Usage
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 Use freely, modify aggressively, and adapt it to your workflow.
 

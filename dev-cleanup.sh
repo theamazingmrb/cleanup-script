@@ -92,11 +92,16 @@ task_desc() {
     cocoapods)         echo "Clear CocoaPods caches (~/Library/Caches/CocoaPods and ~/.cocoapods/repos)" ;;
     android)           echo "Clear Gradle caches (~/.gradle/caches) and Android AVDs" ;;
     node-caches)       echo "Clear Node/Expo/Metro/Yarn/pnpm caches" ;;
+    app-caches)        echo "Clear large app caches (Google, Spotify, Playwright, pipenv, deno, etc.)" ;;
     tm-snapshots)      echo "Thin local Time Machine snapshots (may reclaim System Data)" ;;
     logs)              echo "Clear user and system logs (~/Library/Logs and /Library/Logs)" ;;
     homebrew)          echo "Homebrew cleanup (remove old formula versions and caches)" ;;
     docker-prune)      echo "Docker safe prune (docker system prune). Requires Docker daemon running" ;;
     spotlight)         echo "Spotlight reindex (overnight, high CPU). Rarely needed" ;;
+    xcode-devicesupport) echo "Delete Xcode iOS/watchOS DeviceSupport symbols (re-copied on device connect)" ;;
+    claude-app)        echo "Clear Claude desktop app VM bundles and cache (rebuilds on launch)" ;;
+    vscode-cache)      echo "Clear VS Code cache dirs (keeps settings and extensions)" ;;
+    pip-cache)         echo "Clear pip download cache" ;;
     report)            echo "Report large dev directories (shows sizes, no deletion)" ;;
     *)                 echo "" ;;
   esac
@@ -110,10 +115,15 @@ task_fn() {
 DEFAULT_ORDER=( \
   "report" \
   "xcode-deriveddata" \
+  "xcode-devicesupport" \
   "ios-simulators" \
   "cocoapods" \
   "android" \
   "node-caches" \
+  "app-caches" \
+  "claude-app" \
+  "vscode-cache" \
+  "pip-cache" \
   "tm-snapshots" \
   "logs" \
   "homebrew" \
@@ -147,6 +157,34 @@ task_xcode_deriveddata() {
     ok "Deleted DerivedData."
   else
     info "Skipped DerivedData."
+  fi
+}
+
+task_xcode_devicesupport() {
+  section "Xcode iOS/watchOS DeviceSupport"
+  local ios_path="$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+  local watchos_path="$HOME/Library/Developer/Xcode/watchOS DeviceSupport"
+  local found=0
+
+  for p in "$ios_path" "$watchos_path"; do
+    if [[ -d "$p" ]]; then
+      runinfo "du -sh \"$p\" 2>/dev/null || true"
+      found=1
+    fi
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    ok "No DeviceSupport directories found."
+    return 0
+  fi
+
+  warn "These are debug symbol files. Xcode re-copies them when you connect a device."
+  if confirm "Delete iOS and watchOS DeviceSupport?"; then
+    [[ -d "$ios_path" ]]     && run "rm -rf \"$ios_path\""
+    [[ -d "$watchos_path" ]] && run "rm -rf \"$watchos_path\""
+    ok "Deleted DeviceSupport directories."
+  else
+    info "Skipped DeviceSupport."
   fi
 }
 
@@ -280,6 +318,136 @@ task_node_caches() {
     ok "Cleared caches."
   else
     info "Skipped caches."
+  fi
+}
+
+task_app_caches() {
+  section "App caches (Google, Spotify, Playwright, pipenv, deno, etc.)"
+  local cache_dir="$HOME/Library/Caches"
+  local targets=(
+    "Google"
+    "com.spotify.client"
+    "ms-playwright"
+    "pipenv"
+    "deno"
+    "camoufox"
+    "kortex-frontend-updater"
+    "tradingview-desktop-updater"
+    "com.tradovate.trader.ShipIt"
+    "dotslash"
+    "node-gyp"
+  )
+
+  info "Checking sizes:"
+  local found=()
+  for name in "${targets[@]}"; do
+    local path="$cache_dir/$name"
+    if [[ -d "$path" ]]; then
+      runinfo "du -sh \"$path\" 2>/dev/null || true"
+      found+=("$path")
+    fi
+  done
+
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    ok "No matching app caches found."
+    return 0
+  fi
+
+  warn "These are regeneratable app caches. Apps may re-download data on next launch."
+  if confirm "Delete the above app caches?"; then
+    for path in "${found[@]}"; do
+      run "rm -rf \"$path\""
+    done
+    ok "Deleted app caches."
+  else
+    info "Skipped app caches."
+  fi
+}
+
+task_claude_app() {
+  section "Claude desktop app"
+  local base="$HOME/Library/Application Support/Claude"
+  local targets=("vm_bundles" "Cache" "Code Cache" "claude-code-vm")
+  if [[ ! -d "$base" ]]; then
+    ok "No Claude app data found."
+    return 0
+  fi
+
+  info "Checking sizes:"
+  local found=()
+  for name in "${targets[@]}"; do
+    local path="$base/$name"
+    if [[ -d "$path" ]]; then
+      runinfo "du -sh \"$path\" 2>/dev/null || true"
+      found+=("$path")
+    fi
+  done
+
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    ok "No Claude app cache directories found."
+    return 0
+  fi
+
+  warn "VM bundles and cache rebuild on next launch. Settings and conversations are not touched."
+  if confirm "Delete Claude app caches and VM bundles?"; then
+    for path in "${found[@]}"; do
+      run "rm -rf \"$path\""
+    done
+    ok "Deleted Claude app caches."
+  else
+    info "Skipped Claude app caches."
+  fi
+}
+
+task_vscode_cache() {
+  section "VS Code cache"
+  local base="$HOME/Library/Application Support/Code"
+  if [[ ! -d "$base" ]]; then
+    ok "No VS Code data found."
+    return 0
+  fi
+
+  local targets=("Cache" "Code Cache" "GPUCache" "logs" "CachedData")
+  info "Checking sizes:"
+  local found=()
+  for name in "${targets[@]}"; do
+    local path="$base/$name"
+    if [[ -d "$path" ]]; then
+      runinfo "du -sh \"$path\" 2>/dev/null || true"
+      found+=("$path")
+    fi
+  done
+
+  if [[ "${#found[@]}" -eq 0 ]]; then
+    ok "No VS Code cache directories found."
+    return 0
+  fi
+
+  warn "Settings, extensions, and workspace state are preserved. Only cache and logs are deleted."
+  if confirm "Delete VS Code cache dirs?"; then
+    for path in "${found[@]}"; do
+      run "rm -rf \"$path\""
+    done
+    ok "Deleted VS Code caches."
+  else
+    info "Skipped VS Code caches."
+  fi
+}
+
+task_pip_cache() {
+  section "pip cache"
+  local cache="$HOME/Library/Caches/pip"
+  if [[ ! -d "$cache" ]]; then
+    ok "No pip cache found."
+    return 0
+  fi
+
+  runinfo "du -sh \"$cache\" 2>/dev/null || true"
+  if confirm "Clear pip download cache ($cache)?"; then
+    run "rm -rf \"$cache\""
+    ok "Deleted pip cache."
+  else
+    info "Skipped pip cache."
   fi
 }
 
